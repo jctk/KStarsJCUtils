@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Example Ekos Capture Script
+Script for capturing flat frames
+- Adjusts the EL panel voltage during flat frame capture based on the filter type.
+- Determines the voltage of the SV241 Pro's Variable DC Port according to the filter type.
 
-This script demonstrates how to read and process JSON data
-passed from Ekos during capture script execution.
 """
 
 import sys
 import json
+import subprocess
 
 def main():
     try:
@@ -17,54 +18,60 @@ def main():
         # Extract script type and job information
         script_type = input_data.get("script_type", "")
         job = input_data.get("job", {})
+        frame_type = job.get('type', 'Unknown')
+        filter_type = job.get('filter', 'None')
 
         # Log basic job information
-        print(f"Script type: {script_type}")
-        print(f"Target: {job.get('target_name', 'Unknown')}")
-        print(f"Frame type: {job.get('type', 'Unknown')}")
-        print(f"Filter: {job.get('filter', 'None')}")
-        print(f"Exposure: {job.get('exposure', 0)} seconds")
-        print(f"Binning: {job.get('binning_x', 1)}x{job.get('binning_y', 1)}")
+        print(f"Script type={script_type} Target={job.get('target_name', 'Unknown')} Frame type={frame_type} Filter={filter_type}")
 
         # Handle different script types
-        if script_type == "POST_CAPTURE":
-            # Access FITS file information
-            fits = input_data.get("fits", {})
-            filename = fits.get("filename", "")
-            print(f"Captured file: {filename}")
+        match script_type:
+            case "PRE_CAPTURE":
+                # Adjust the EL panel voltage during flat frame capture based on the filter type.
+                if frame_type == "Flat":
+                    # Check if SV241 Pro is running.
+                    result = subprocess.run(["indi_eval", '"SVBONY SV241 Pro.CONNECTION.CONNECT"==1'])
+                    if result.returncode == 0:
+                        print("SV241 Pro driver is connected.")
 
-            # Access FITS headers
-            headers = fits.get("headers", {})
-            if headers:
-                print("FITS Headers:")
-                for key, value in headers.items():
-                    print(f"  {key}: {value}")
+                        # Determine the voltage of the SV241 Pro's Variable DC Port according to the filter type.
+                        voltage = 6 if filter_type == "B" or filter_type == "L" or filter_type == "UVIRcut" else 12
+                        print(f"SV241 Pro Voltage: {voltage}V for '{filter_type}'")
 
-            # Log progress
-            progress = input_data.get("progress", {})
-            completed = progress.get("completed", 0)
-            total = progress.get("total", 0)
-            print(f"Job progress: {completed}/{total} images")
+                        # Variable DC Port On
+                        result = subprocess.run(["indi_setprop", "SVBONY SV241 Pro.VARIABLE_CHANNELS.VAR_CHANNEL_1=On"])
+                        if result.returncode != 0:
+                            print("Failed to turn on SV241 Pro Variable DC Port.", file=sys.stderr)
+                            sys.exit(1)
 
-            # Add your custom logic here, e.g.:
-            # - Copy file to backup location
-            # - Update a database
-            # - Send a notification
-            # - Trigger external processing
+                        # Variable DC Port set voltage
+                        result = subprocess.run(["indi_setprop", f"SVBONY SV241 Pro.VARIABLE_VOLTAGES.VAR_CHANNEL_1={voltage}"])
+                        if result.returncode != 0:
+                            print("Failed to set SV241 Pro Variable DC Port voltage.", file=sys.stderr)
+                            sys.exit(1)
+                    else:
+                        print("SV241 Pro driver is not connected.", file=sys.stderr)
+                        sys.exit(1)
 
-        elif script_type == "POST_JOB":
-            # Job completed, log sequence progress
-            progress = input_data.get("progress", {})
-            completed = progress.get("completed", 0)
-            total = progress.get("total", 0)
-            print(f"Sequence progress: {completed}/{total} jobs completed")
+                elif frame_type == "Dark":
+                    # Check if SV241 Pro is running.
+                    result = subprocess.run(["indi_eval", '"SVBONY SV241 Pro.CONNECTION.CONNECT"==1'])
+                    if result.returncode == 0:
+                        # Variable DC Port Off
+                        result = subprocess.run(["indi_setprop", "SVBONY SV241 Pro.VARIABLE_CHANNELS.VAR_CHANNEL_1=Off"])
+                        if result.returncode != 0:
+                            print("Failed to turn off SV241 Pro Variable DC Port.", file=sys.stderr)
+                            sys.exit(1)
 
-            # Add your custom logic here, e.g.:
-            # - Send completion notification
-            # - Update observatory status
-            # - Clean up temporary files
+            case "POST_CAPTURE":
+                pass  # Valid script types, continue processing
+            case "PRE_JOB":
+                pass  # Valid script types, continue processing
+            case "POST_JOB":
+                pass  # Valid script types, continue processing
+            case _:
+                print(f"Unknown script type: {script_type}", file=sys.stderr)
 
-        # Exit with success code
         sys.exit(0)
 
     except json.JSONDecodeError as e:
@@ -77,3 +84,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
